@@ -83,6 +83,31 @@ impl BestAndLatest {
 	}
 }
 
+// used in snapshot finalization validation
+#[derive(Debug, Clone, Default)]
+struct ChildrenBlockHashes {
+	// List of children block hashes
+	children: Vec<H256>,
+}
+
+impl Encodable for ChildrenBlockHashes {
+	fn rlp_append(&self, stream: &mut RlpStream) {
+		stream.append_list(&self.children);
+	}
+}
+
+impl Decodable for ChildrenBlockHashes {
+	fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
+		Ok(ChildrenBlockHashes { children: rlp.list_at(0)? })
+	}
+}
+
+impl HeapSizeOf for ChildrenBlockHashes {
+	fn heap_size_of_children(&self) -> usize {
+		self.children.heap_size_of_children()
+	}
+}
+
 // candidate block description.
 struct Candidate {
 	hash: H256,
@@ -148,26 +173,30 @@ fn era_key(number: u64) -> String {
 	format!("candidates_{}", number)
 }
 
-fn pending_transition_key(block_hash: H256) -> H264 {
-	const LEADING: u8 = 1;
-
+#[inline]
+fn h264_key(leading: u8, block_hash: H256) -> H264 {
 	let mut key = H264::default();
 
-	key[0] = LEADING;
+	key[0] = leading;
 	key.0[1..].copy_from_slice(&block_hash.0[..]);
 
 	key
 }
 
+fn pending_transition_key(block_hash: H256) -> H264 {
+	const LEADING: u8 = 1;
+	h264_key(LEADING, block_hash)
+}
+
 fn transition_key(block_hash: H256) -> H264 {
 	const LEADING: u8 = 2;
+	h264_key(LEADING, block_hash)
+}
 
-	let mut key = H264::default();
-
-	key[0] = LEADING;
-	key.0[1..].copy_from_slice(&block_hash.0[..]);
-
-	key
+// used in snapshot restoration
+fn children_key(block_hash: H256) -> H264 {
+	const LEADING: u8 = 3;
+	h264_key(LEADING, block_hash)
 }
 
 // encode last canonical transition entry: header and proof.
@@ -510,6 +539,26 @@ impl HeaderChain {
 			transaction.put(self.col, CURRENT_KEY, &::rlp::encode(&curr))
 		}
 		Ok(pending)
+	}
+
+	// RestorationTargetChain::add_child` implementation
+	pub(super) fn add_child(&self, batch: &mut DBTransaction, block_hash: H256, child_hash: H256) {
+		let key = children_key(block_hash);
+
+		let mut children = self.get_children(&key).unwrap_or_default();
+		children.children.push(child_hash);
+
+		batch.put(self.col, &*key, &::rlp::encode(&children));
+	}
+
+	fn get_children(&self, key: &H264) -> Option<ChildrenBlockHashes> {
+		match self.db.get(self.col, &*key) {
+			Ok(maybe_bytes) => maybe_bytes.map(|bytes| ::rlp::decode(&bytes).expect("decoding value from db failed")),
+			Err(e) => {
+				warn!(target: "chain", "Error reading from database: {}", e);
+				None
+			}
+		}
 	}
 
 	fn produce_next_cht_root(

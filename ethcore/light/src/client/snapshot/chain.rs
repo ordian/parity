@@ -72,8 +72,8 @@ impl RestorationTargetChain for LightChain {
 		self.chain.block_header(BlockId::Hash(hash.clone())).and_then(|h| h.decode().ok())
 	}
 
-	fn add_child(&self, _batch: &mut DBTransaction, _block_hash: H256, _child_hash: H256) {
-		// TODO
+	fn add_child(&self, batch: &mut DBTransaction, block_hash: H256, child_hash: H256) {
+		self.chain.add_child(batch, block_hash, child_hash);
 	}
 
 	fn insert_epoch_transition(
