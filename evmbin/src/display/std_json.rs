@@ -268,19 +268,16 @@ impl<Trace: Writer, Out: Writer> trace::VMTracer for Informant<Trace, Out> {
 		true
 	}
 
-	fn trace_prepare_execute(&mut self, _pc: usize, _instruction: u8, _gas_cost: U256, _mem_written: Option<(usize, usize)>, store_written: Option<(U256, U256)>) {
-		let subdepth = self.subdepth;
-		Self::with_informant_in_depth(self, subdepth, |informant: &mut Informant<Trace, Out>| {
-			if let Some((pos, val)) = store_written {
-				informant.storage.insert(BigEndianHash::from_uint(&pos), BigEndianHash::from_uint(&val));
-			}
-		});
+	fn trace_prepare_execute(&mut self, _pc: usize, _instruction: u8, _gas_cost: U256) {
 	}
 
-	fn trace_executed(&mut self, _gas_used: U256, stack_push: &[U256], _mem: &[u8]) {
+	fn trace_executed(&mut self, _gas_used: U256, stack_push: &[U256], _mem: &[u8], _mem_written: Option<(usize, usize)>, store_written: Option<(U256, U256)>) {
 		let subdepth = self.subdepth;
 		Self::with_informant_in_depth(self, subdepth, |informant: &mut Informant<Trace, Out>| {
 			let info = ::evm::Instruction::from_u8(informant.instruction).map(|i| i.info());
+			if let Some((pos, val)) = store_written {
+				informant.storage.insert(BigEndianHash::from_uint(&pos), BigEndianHash::from_uint(&val));
+			}
 
 			let len = informant.stack.len();
 			let info_args = info.map(|i| i.args).unwrap_or(0);

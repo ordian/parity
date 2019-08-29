@@ -38,8 +38,6 @@ pub struct Informant {
 	instruction: u8,
 	gas_cost: U256,
 	gas_used: U256,
-	mem_written: Option<(usize, usize)>,
-	store_written: Option<(U256, U256)>,
 	stack: Vec<U256>,
 	memory: Vec<u8>,
 	storage: HashMap<H256, H256>,
@@ -188,21 +186,18 @@ impl trace::VMTracer for Informant {
 		true
 	}
 
-	fn trace_prepare_execute(&mut self, pc: usize, instruction: u8, gas_cost: U256, mem_written: Option<(usize, usize)>, store_written: Option<(U256, U256)>) {
+	fn trace_prepare_execute(&mut self, pc: usize, instruction: u8, gas_cost: U256) {
 		let subdepth = self.subdepth;
 		Self::with_informant_in_depth(self, subdepth, |informant: &mut Informant| {
 			informant.pc = pc;
 			informant.instruction = instruction;
 			informant.gas_cost = gas_cost;
-			informant.mem_written = mem_written;
-			informant.store_written = store_written;
 		});
 	}
 
-	fn trace_executed(&mut self, gas_used: U256, stack_push: &[U256], mem: &[u8]) {
+	fn trace_executed(&mut self, gas_used: U256, stack_push: &[U256], mem: &[u8], mem_written: Option<(usize, usize)>, store_written: Option<(U256, U256)>) {
 		let subdepth = self.subdepth;
 		Self::with_informant_in_depth(self, subdepth, |informant: &mut Informant| {
-			let store_diff = informant.store_written.clone();
 			let info = ::evm::Instruction::from_u8(informant.instruction).map(|i| i.info());
 
 			let trace = Self::informant_trace(informant, gas_used);
@@ -217,14 +212,14 @@ impl trace::VMTracer for Informant {
 			informant.stack.extend_from_slice(stack_push);
 
 			// TODO [ToDr] Align memory?
-			if let Some((pos, size)) = informant.mem_written.clone() {
+			if let Some((pos, size)) = mem_written {
 				if informant.memory.len() < (pos + size) {
 					informant.memory.resize(pos + size, 0);
 				}
 				informant.memory[pos..(pos + size)].copy_from_slice(&mem[pos..(pos + size)]);
 			}
 
-			if let Some((pos, val)) = store_diff {
+			if let Some((pos, val)) = store_written {
 				informant.storage.insert(BigEndianHash::from_uint(&pos), BigEndianHash::from_uint(&val));
 			}
 
