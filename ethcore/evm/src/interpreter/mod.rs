@@ -314,8 +314,8 @@ impl<Cost: CostType> Interpreter<Cost> {
 	/// Inner helper function for step.
 	#[inline(always)]
 	fn step_inner(&mut self, ext: &mut dyn vm::Ext) -> InterpreterResult {
-		let result = match self.resume_result.take() {
-			Some(result) => result,
+		let (result, mem_written, store_written) = match self.resume_result.take() {
+			Some(result) => (result, None, None),
 			None => {
 				let opcode = self.reader.code[self.reader.position];
 				let instruction = Instruction::from_u8(opcode);
@@ -344,9 +344,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(t) => t,
 					Err(e) => return InterpreterResult::Done(Err(e)),
 				};
-				if self.do_trace {
-					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256(), Self::mem_written(instruction, &self.stack), Self::store_written(instruction, &self.stack));
-				}
+				let (mem_written, store_written) = if self.do_trace {
+					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256());
+					(Self::mem_written(instruction, &self.stack), Self::store_written(instruction, &self.stack))
+				} else {
+					(None, None)
+				};
 				if let Err(e) = self.gasometer.as_mut().expect(GASOMETER_PROOF).verify_gas(&requirements.gas_cost) {
 					return InterpreterResult::Done(Err(e));
 				}
@@ -365,7 +368,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(x) => x,
 				};
 				evm_debug!({ self.informant.after_instruction(instruction) });
-				result
+				(result, mem_written, store_written)
 			},
 		};
 
@@ -382,6 +385,8 @@ impl<Cost: CostType> Interpreter<Cost> {
 				self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas.as_u256(),
 				self.stack.peek_top(self.last_stack_ret_len),
 				&self.mem,
+				mem_written,
+				store_written,
 			);
 		}
 
