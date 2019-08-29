@@ -184,6 +184,8 @@ pub struct Interpreter<Cost: CostType> {
 	stack: VecStack<U256>,
 	resume_output_range: Option<(U256, U256)>,
 	resume_result: Option<InstructionResult<Cost>>,
+	last_mem_written: Option<(usize, usize)>,
+	last_store_written: Option<(U256, U256)>,
 	last_stack_ret_len: usize,
 	_type: PhantomData<Cost>,
 }
@@ -282,9 +284,11 @@ impl<Cost: CostType> Interpreter<Cost> {
 			do_trace: true,
 			mem: Vec::new(),
 			return_data: ReturnData::empty(),
-			last_stack_ret_len: 0,
 			resume_output_range: None,
 			resume_result: None,
+			last_mem_written: None,
+			last_store_written: None,
+			last_stack_ret_len: 0,
 			_type: PhantomData,
 		}
 	}
@@ -320,7 +324,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 	#[inline(always)]
 	fn step_inner(&mut self, ext: &mut dyn vm::Ext) -> InterpreterResult {
 		let (result, mem_written, store_written) = match self.resume_result.take() {
-			Some(result) => (result, None, None),
+			Some(result) => (result, self.last_mem_written.take(), self.last_store_written.take()),
 			None => {
 				let opcode = self.reader.code[self.reader.position];
 				let instruction = Instruction::from_u8(opcode);
@@ -349,12 +353,13 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(t) => t,
 					Err(e) => return InterpreterResult::Done(Err(e)),
 				};
-				let (mem_written, store_written) = if self.do_trace {
+
+				self.last_mem_written = Self::mem_written(instruction, &self.stack);
+				self.last_store_written = Self::store_written(instruction, &self.stack);
+				if self.do_trace {
 					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256());
-					(Self::mem_written(instruction, &self.stack), Self::store_written(instruction, &self.stack))
-				} else {
-					(None, None)
-				};
+				}
+
 				if let Err(e) = self.gasometer.as_mut().expect(GASOMETER_PROOF).verify_gas(&requirements.gas_cost) {
 					return InterpreterResult::Done(Err(e));
 				}
@@ -373,7 +378,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(x) => x,
 				};
 				evm_debug!({ self.informant.after_instruction(instruction) });
-				(result, mem_written, store_written)
+				(result, self.last_mem_written, self.last_store_written)
 			},
 		};
 
