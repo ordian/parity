@@ -184,8 +184,8 @@ pub struct Interpreter<Cost: CostType> {
 	stack: VecStack<U256>,
 	resume_output_range: Option<(U256, U256)>,
 	resume_result: Option<InstructionResult<Cost>>,
-	last_mem_written: Option<(usize, usize)>,
-	last_store_written: Option<(U256, U256)>,
+	resume_mem_written: Option<(usize, usize)>,
+	resume_store_written: Option<(U256, U256)>,
 	last_stack_ret_len: usize,
 	_type: PhantomData<Cost>,
 }
@@ -286,8 +286,8 @@ impl<Cost: CostType> Interpreter<Cost> {
 			return_data: ReturnData::empty(),
 			resume_output_range: None,
 			resume_result: None,
-			last_mem_written: None,
-			last_store_written: None,
+			resume_mem_written: None,
+			resume_store_written: None,
 			last_stack_ret_len: 0,
 			_type: PhantomData,
 		}
@@ -324,7 +324,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 	#[inline(always)]
 	fn step_inner(&mut self, ext: &mut dyn vm::Ext) -> InterpreterResult {
 		let (result, mem_written, store_written) = match self.resume_result.take() {
-			Some(result) => (result, self.last_mem_written.take(), self.last_store_written.take()),
+			Some(result) => (result, self.resume_mem_written.take(), self.resume_store_written.take()),
 			None => {
 				let opcode = self.reader.code[self.reader.position];
 				let instruction = Instruction::from_u8(opcode);
@@ -354,8 +354,9 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Err(e) => return InterpreterResult::Done(Err(e)),
 				};
 
-				self.last_mem_written = Self::mem_written(instruction, &self.stack);
-				self.last_store_written = Self::store_written(instruction, &self.stack);
+				let mem_written = Self::mem_written(instruction, &self.stack);
+				let store_written = Self::store_written(instruction, &self.stack);
+
 				if self.do_trace {
 					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256());
 				}
@@ -378,11 +379,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(x) => x,
 				};
 				evm_debug!({ self.informant.after_instruction(instruction) });
-				(result, self.last_mem_written, self.last_store_written)
+				(result, mem_written, store_written)
 			},
 		};
 
 		if let InstructionResult::Trap(trap) = result {
+			self.resume_mem_written = mem_written;
+			self.resume_store_written = store_written;
+
 			return InterpreterResult::Trap(trap);
 		}
 
