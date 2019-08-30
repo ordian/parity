@@ -18,7 +18,7 @@
 
 use ethereum_types::{U256, Address};
 use vm::{Error as VmError, ActionParams};
-use log::{debug, warn};
+use log::debug;
 use crate::{
 	Tracer, VMTracer, FlatTrace,
 	trace::{Call, Create, Action, Res, CreateResult, CallResult, VMTrace, VMOperation, VMExecutedOperation, MemoryDiff, StorageDiff, Suicide, Reward, RewardType},
@@ -248,25 +248,13 @@ impl VMTracer for ExecutiveVMTracer {
 	}
 
 	fn trace_executed(&mut self, gas_used: U256, stack_push: &[U256], mem: &[u8]) {
-		let mem_diff = self.last_mem_written.take().map(|(o, s)| {
-			if o + s > mem.len() {
-				warn!(
-					target: "trace",
-					"Last mem written is out of bounds {} (mem is {})",
-					o + s,
-					mem.len(),
-				);
-				(o, &[][..])
-			} else {
-				(o, &(mem[o..o+s]))
-			}
-		});
+		let mem_diff = self.last_mem_written.take().map(|(o, s)| (o, &(mem[o..o+s])));
 		let store_diff = self.last_store_written.take();
 		Self::with_trace_in_depth(&mut self.data, self.depth, move |trace| {
 			let ex = VMExecutedOperation {
 				gas_used: gas_used,
-				stack_push: stack_push.iter().cloned().collect(),
-				mem_diff: mem_diff.map(|(s, r)| MemoryDiff { offset: s, data: r.iter().cloned().collect() }),
+				stack_push: stack_push.to_vec(),
+				mem_diff: mem_diff.map(|(s, r)| MemoryDiff { offset: s, data: r.to_vec() }),
 				store_diff: store_diff.map(|(l, v)| StorageDiff { location: l, value: v }),
 			};
 			trace.operations.last_mut().expect("trace_executed is always called after a trace_prepare_execute; trace.operations cannot be empty; qed").executed = Some(ex);
@@ -288,6 +276,8 @@ impl VMTracer for ExecutiveVMTracer {
 
 	fn done_subtrace(&mut self) {
 		self.depth -= 1;
+		self.last_mem_written = None;
+		self.last_store_written = None;
 	}
 
 	fn drain(mut self) -> Option<VMTrace> { self.data.subs.pop() }
