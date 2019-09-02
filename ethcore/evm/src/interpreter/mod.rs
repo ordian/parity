@@ -169,6 +169,11 @@ pub enum InterpreterResult {
 	Trap(TrapKind),
 }
 
+struct TraceData {
+	mem_written: Option<(usize, usize)>,
+	store_written: Option<(U256, U256)>,
+}
+
 /// Intepreter EVM implementation
 pub struct Interpreter<Cost: CostType> {
 	mem: Vec<u8>,
@@ -184,8 +189,9 @@ pub struct Interpreter<Cost: CostType> {
 	stack: VecStack<U256>,
 	resume_output_range: Option<(U256, U256)>,
 	resume_result: Option<InstructionResult<Cost>>,
-	resume_mem_written: Option<(usize, usize)>,
-	resume_store_written: Option<(U256, U256)>,
+	// we store the stack of mem/store changes
+	// when doing subcalls (used by ExecutiveVMTracer)
+	trace_stack: Vec<TraceData>,
 	last_stack_ret_len: usize,
 	_type: PhantomData<Cost>,
 }
@@ -286,8 +292,8 @@ impl<Cost: CostType> Interpreter<Cost> {
 			return_data: ReturnData::empty(),
 			resume_output_range: None,
 			resume_result: None,
-			resume_mem_written: None,
-			resume_store_written: None,
+			mem_written: Vec::new(),
+			store_written: Vec::new(),
 			last_stack_ret_len: 0,
 			_type: PhantomData,
 		}
@@ -323,8 +329,8 @@ impl<Cost: CostType> Interpreter<Cost> {
 	/// Inner helper function for step.
 	#[inline(always)]
 	fn step_inner(&mut self, ext: &mut dyn vm::Ext) -> InterpreterResult {
-		let (result, mem_written, store_written) = match self.resume_result.take() {
-			Some(result) => (result, self.resume_mem_written.take(), self.resume_store_written.take()),
+		let (result, maybe_trace_data) = match self.resume_result.take() {
+			Some(result) => (result, self.trace_stack.pop()),
 			None => {
 				let opcode = self.reader.code[self.reader.position];
 				let instruction = Instruction::from_u8(opcode);
@@ -354,12 +360,15 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Err(e) => return InterpreterResult::Done(Err(e)),
 				};
 
-				let mem_written = Self::mem_written(instruction, &self.stack);
-				let store_written = Self::store_written(instruction, &self.stack);
-
-				if self.do_trace {
+				let maybe_trace_data = if self.do_trace {
 					ext.trace_prepare_execute(self.reader.position - 1, opcode, requirements.gas_cost.as_u256());
-				}
+					Some(TraceData {
+						mem_written: Self::mem_written(instruction, &self.stack),
+						store_written: Self::store_written(instruction, &self.stack),
+					})
+				} else {
+					None
+				};
 
 				if let Err(e) = self.gasometer.as_mut().expect(GASOMETER_PROOF).verify_gas(&requirements.gas_cost) {
 					return InterpreterResult::Done(Err(e));
@@ -379,13 +388,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 					Ok(x) => x,
 				};
 				evm_debug!({ self.informant.after_instruction(instruction) });
-				(result, mem_written, store_written)
+				(result, maybe_trace_data)
 			},
 		};
 
 		if let InstructionResult::Trap(trap) = result {
-			self.resume_mem_written = mem_written;
-			self.resume_store_written = store_written;
+			if let Some(trace_data) = maybe_trace_data {
+				self.trace_stack.push(trace_data);
+			}
 
 			return InterpreterResult::Trap(trap);
 		}
@@ -394,7 +404,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 			self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas = self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas + *gas;
 		}
 
-		if self.do_trace {
+		if let Some(TraceData { mem_written, store_written }) = maybe_trace_data {
 			ext.trace_executed(
 				self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas.as_u256(),
 				self.stack.peek_top(self.last_stack_ret_len),
