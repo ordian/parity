@@ -292,8 +292,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 			return_data: ReturnData::empty(),
 			resume_output_range: None,
 			resume_result: None,
-			mem_written: Vec::new(),
-			store_written: Vec::new(),
+			trace_stack: Vec::new(),
 			last_stack_ret_len: 0,
 			_type: PhantomData,
 		}
